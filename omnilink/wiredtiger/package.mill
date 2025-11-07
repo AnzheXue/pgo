@@ -1,0 +1,89 @@
+package build.omnilink.wiredtiger
+
+import mill.*
+
+object `package` extends Module:
+  wiredtiger =>
+
+  object release_11_3_1 extends WTTracingConfigModule:
+    def tracingExecutable = Task:
+      build.omnilink.buildPkg(
+        name = "omnilink.wiredtiger.workload",
+        outPath = os.sub / "bin" / "main",
+      )()
+    end tracingExecutable
+    def wtPerf = Task:
+      build.omnilink.buildPkg(
+        name = "omnilink.wiredtiger.lib.v11_3_1",
+        outPath = os.sub / "bin" / "wtperf",
+      )()
+    end wtPerf
+
+    def specToValidate = Task.Source(wiredtiger.moduleDir / "Storage.tla")
+    def specToValidateMC =
+      Task.Source(wiredtiger.moduleDir / "MCStorageValidate.tla")
+    def specToValidateMCConfig =
+      Task.Source(wiredtiger.moduleDir / "MCStorageValidate.cfg")
+  end release_11_3_1
+
+  object reflocking extends WTTracingConfigModule:
+    def specToValidate = Task.Source(wiredtiger.moduleDir / "RefLocking.tla")
+    def specToValidateMC =
+      Task.Source(wiredtiger.moduleDir / "MCRefLockingValidate.tla")
+    def specToValidateMCConfig =
+      Task.Source(wiredtiger.moduleDir / "MCRefLockingValidate.cfg")
+    def wtPerf = Task:
+      build.omnilink.buildPkg(
+        name = "omnilink.wiredtiger.lib.lockbug",
+        outPath = os.sub / "bin" / "wtperf",
+      )()
+    end wtPerf
+
+    def createWtPerf = Task.Source(os.sub / "ycsb-c-create.wtperf")
+    def runWtPerf = Task.Source(os.sub / "ycsb-c-run.wtperf")
+
+    def initDB = Task:
+      val dbDir = Task.dest / "db"
+      os.call(
+        cmd = List[os.Shellable](
+          release_11_3_1.wtPerf().path,
+          "-h",
+          dbDir,
+          "-O",
+          createWtPerf().path,
+        ),
+        cwd = Task.dest,
+        stdout = os.Inherit,
+        stderr = os.Inherit,
+      )
+      PathRef(dbDir)
+    end initDB
+
+    def tracingExecutable = Task:
+      val dbDir = Task.dest / "db"
+      val script = Task.dest / "run.sh"
+      val contents =
+        s"""#!/usr/bin/env bash
+           |cp -r ${initDB().path} $dbDir
+           |${wtPerf().path} -h $dbDir -O ${runWtPerf().path}
+        """.stripMargin
+      os.write(script, contents, perms = os.PermSet.fromString("rwxr-xr-x"))
+      PathRef(script)
+    end tracingExecutable
+  end reflocking
+
+  trait WTTracingConfigModule extends build.omnilink.TracingConfigModule:
+    object defaultConfig extends ConfigModule:
+      def threadCount = 5
+      def operationCount = 100
+    end defaultConfig
+    object longConfig extends ConfigModule:
+      def threadCount = 5
+      def operationCount = 10000
+    end longConfig
+    object wideConfig extends ConfigModule:
+      def threadCount = 50
+      def operationCount = 100
+    end wideConfig
+  end WTTracingConfigModule
+end `package`
