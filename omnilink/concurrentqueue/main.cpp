@@ -50,8 +50,8 @@ struct QueueWorkloadContext: public omnilink::WorkloadContext<QueueWorkloadConte
             for (int32_t i = 0; i < count; i++) {
                 elements[i] = rand_element();
             }
-            size_t enqueued = workload_context.queue.enqueue_bulk(elements.data(), count);
-            ctx.op = ConcurrentQueueAPI::QueueEnqueueBulk{elements, count, enqueued == static_cast<size_t>(count)};
+            bool success = workload_context.queue.enqueue_bulk(elements.data(), count);
+            ctx.op = ConcurrentQueueAPI::QueueEnqueueBulk{elements, count, success};
         }
 
         // void perform_operation(Ctx<ConcurrentQueueAPI::QueueEnqueueBulkWithToken>& ctx) {
@@ -94,8 +94,8 @@ struct QueueWorkloadContext: public omnilink::WorkloadContext<QueueWorkloadConte
             for (int32_t i = 0; i < count; i++) {
                 elements[i] = rand_element();
             }
-            size_t enqueued = workload_context.queue.try_enqueue_bulk(elements.data(), count);
-            ctx.op = ConcurrentQueueAPI::QueueTryEnqueueBulk{elements, count, enqueued == static_cast<size_t>(count)};
+            bool success = workload_context.queue.try_enqueue_bulk(elements.data(), count);
+            ctx.op = ConcurrentQueueAPI::QueueTryEnqueueBulk{elements, count, success};
         }
 
         // void perform_operation(Ctx<ConcurrentQueueAPI::QueueTryEnqueueBulkWithToken>& ctx) {
