@@ -1,7 +1,6 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -44,39 +43,36 @@ struct QueueWorkloadContext: public omnilink::WorkloadContext<QueueWorkloadConte
         return std::nullopt;
     }
 
-    std::optional<std::vector<int32_t>> resolve_producers_for_bulk(const int32_t* elements, size_t count) {
+    std::optional<int32_t> resolve_producer_for_bulk(const int32_t* elements, size_t count) {
         if (count == 0) {
             return std::nullopt;
         }
-
         std::lock_guard<std::mutex> lock(instrumentation_mutex);
-
-        std::vector<int32_t> producers;
-        producers.reserve(count);
-
-        for (size_t idx = 0; idx < count; ++idx) {
-            auto found = pending_per_thread.end();
-            for (auto it = pending_per_thread.begin(); it != pending_per_thread.end(); ++it) {
-                auto &pending = it->second;
-                if (!pending.empty() && pending.front() == elements[idx]) {
-                    found = it;
+        for (auto it = pending_per_thread.begin(); it != pending_per_thread.end(); ++it) {
+            auto &pending = it->second;
+            if (pending.size() < count) {
+                continue;
+            }
+            bool matches = true;
+            for (size_t i = 0; i < count; ++i) {
+                if (pending[i] != elements[i]) {
+                    matches = false;
                     break;
                 }
             }
-
-            if (found == pending_per_thread.end()) {
-                return std::nullopt;
+            if (!matches) {
+                continue;
             }
-
-            producers.push_back(found->first);
-            auto &pending = found->second;
-            pending.pop_front();
+            int32_t producer = it->first;
+            for (size_t i = 0; i < count; ++i) {
+                pending.pop_front();
+            }
             if (pending.empty()) {
-                pending_per_thread.erase(found);
+                pending_per_thread.erase(it);
             }
+            return producer;
         }
-
-        return producers;
+        return std::nullopt;
     }
 
     struct RunnerDefns: public WorkloadContext::RunnerDefnsBase<RunnerDefns> {
@@ -208,12 +204,14 @@ struct QueueWorkloadContext: public omnilink::WorkloadContext<QueueWorkloadConte
             int32_t element = 0;
             bool success = workload_context.queue.try_dequeue(element);
             ctx.op = ConcurrentQueueAPI::QueueTryDequeue{element, success};
+
             int32_t producer_thread = static_cast<int32_t>(thread_idx);
             if (success) {
                 if (auto resolved = workload_context.resolve_producer_for_dequeue(element)) {
                     producer_thread = *resolved;
                 }
             }
+
             ctx.op.thread = producer_thread;
         }
 
@@ -233,27 +231,15 @@ struct QueueWorkloadContext: public omnilink::WorkloadContext<QueueWorkloadConte
             int32_t max = rand_bulk_size();
             std::vector<int32_t> elements(max);
             size_t dequeued = workload_context.queue.try_dequeue_bulk(elements.data(), max);
-            if (dequeued < static_cast<size_t>(elements.size())) {
-                elements.resize(dequeued);
-            }
-            std::vector<int32_t> producer_threads;
+
+            int32_t producer_thread = static_cast<int32_t>(thread_idx);
             if (dequeued > 0) {
-                if (auto resolved = workload_context.resolve_producers_for_bulk(elements.data(), dequeued)) {
-                    producer_threads = std::move(*resolved);
+                if (auto resolved = workload_context.resolve_producer_for_bulk(elements.data(), dequeued)) {
+                    producer_thread = *resolved;
                 }
             }
             ctx.op = ConcurrentQueueAPI::QueueTryDequeueBulk{elements, max, static_cast<int32_t>(dequeued)};
-            ctx.op.thread = static_cast<int32_t>(thread_idx);
-            std::map<std::string, omnilink::Packable> meta{
-                {"consumer_thread", static_cast<int32_t>(thread_idx)}
-            };
-            if (!producer_threads.empty()) {
-                meta["producer_threads"] = producer_threads;
-                ctx.op.producers = producer_threads;
-            } else {
-                ctx.op.producers = std::vector<int32_t>{};
-            }
-            ctx.op._meta = std::move(meta);
+            ctx.op.thread = producer_thread;
         }
 
         // void perform_operation(Ctx<ConcurrentQueueAPI::QueueTryDequeueBulkWithToken>& ctx) {

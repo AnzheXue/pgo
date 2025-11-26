@@ -1,261 +1,227 @@
 ---- MODULE ConcurrentQueueAPI ----
-EXTENDS FiniteSets, Integers, Sequences, TLC
+EXTENDS FiniteSets, Integers, Sequences, TLC, SequencesExt, FiniteSetsExt
 
 CONSTANTS Elements, MaxElements, Threads, MaxBulkSize
 
-VARIABLES queue, enqueued, dequeued
+VARIABLES queues, enqueued, dequeued
 
-vars == <<queue, enqueued, dequeued>>
+vars == <<queues, enqueued, dequeued>>
+
+QueueOf(thread) == queues[thread]
+UpdateQueue(thread, seq) == [queues EXCEPT ![thread] = seq]
+
+RECURSIVE TotalLenHelper(_, _)
+
+TotalLenHelper(qs, ts) ==
+    IF ts = {}
+    THEN 0
+    ELSE LET t == CHOOSE x \in ts : TRUE
+         IN Len(qs[t]) + TotalLenHelper(qs, ts \ {t})
+
+TotalLen(qs) == TotalLenHelper(qs, Threads)
+
+CanEnqueue(count) == TotalLen(queues) + count <= MaxElements
+CanDequeue(thread) == Len(QueueOf(thread)) > 0
+
+Take(seq, n) ==
+    IF n <= 0
+    THEN << >>
+    ELSE IF n >= Len(seq)
+         THEN seq
+         ELSE SubSeq(seq, 1, n)
+
+MinCount(a, b) ==
+    IF a <= b THEN a ELSE b
+
+RepeatValue(value, count) ==
+    IF count = 0 THEN <<>> ELSE [i \in 1..count |-> value]
+
+PayloadForElement(element) == <<element>>
+
+BulkBufferSet == { seq \in Seq(Elements) : Len(seq) <= MaxBulkSize }
+BulkBuffer(elements) == elements \in BulkBufferSet
+BulkPayload(elements, count) == Take(elements, count)
+
+BulkArgsOk(elements, count) ==
+    /\ BulkBuffer(elements)
+    /\ count \in 1..MaxBulkSize
+    /\ Len(elements) >= count
+    /\ IsPrefix(BulkPayload(elements, count), elements)
+
+EnqueueOutcome(canEnqueue, thread, payload, delta, success) ==
+    IF canEnqueue
+    THEN /\ success = TRUE
+         /\ queues' = UpdateQueue(thread, QueueOf(thread) \o payload)
+         /\ enqueued' = enqueued + delta
+    ELSE /\ success = FALSE
+         /\ UNCHANGED queues
+         /\ UNCHANGED enqueued
+
+DequeueOutcome(canDequeue, thread, element, success) ==
+    IF canDequeue
+    THEN /\ success = TRUE
+         /\ element = Head(QueueOf(thread))
+         /\ queues' = UpdateQueue(thread, Tail(QueueOf(thread)))
+         /\ dequeued' = dequeued + 1
+    ELSE /\ success = FALSE
+         /\ element \in Elements
+         /\ UNCHANGED queues
+         /\ UNCHANGED dequeued
+
+RECURSIVE BulkRemovalOk(_, _, _)
+RECURSIVE BulkRemovalQueues(_, _, _)
+
+BulkRemovalOk(qs, payload, producers) ==
+    IF payload = <<>>
+    THEN producers = <<>>
+    ELSE IF producers = <<>>
+         THEN FALSE
+         ELSE LET thread == Head(producers)
+                  restProducers == Tail(producers)
+                  elem == Head(payload)
+                  restPayload == Tail(payload)
+              IN /\ thread \in Threads
+                 /\ Len(qs[thread]) > 0
+                 /\ elem = Head(qs[thread])
+                 /\ BulkRemovalOk([qs EXCEPT ![thread] = Tail(qs[thread])], restPayload, restProducers)
+
+BulkRemovalQueues(qs, payload, producers) ==
+    IF payload = <<>>
+    THEN qs
+    ELSE IF producers = <<>>
+         THEN qs
+         ELSE LET thread == Head(producers)
+                  restProducers == Tail(producers)
+                  restPayload == Tail(payload)
+                  nextQs == [qs EXCEPT ![thread] = Tail(qs[thread])]
+              IN BulkRemovalQueues(nextQs, restPayload, restProducers)
+
+BulkDequeueOutcomeMulti(payload, producers) ==
+    LET actualCount == Len(payload)
+    IN IF actualCount = 0
+       THEN /\ producers = <<>>
+            /\ UNCHANGED queues
+            /\ UNCHANGED dequeued
+       ELSE /\ producers \in Seq(Threads)
+            /\ Len(producers) = actualCount
+            /\ BulkRemovalOk(queues, payload, producers)
+            /\ queues' = BulkRemovalQueues(queues, payload, producers)
+            /\ dequeued' = dequeued + actualCount
 
 TypeOK ==
-    /\ queue \in Seq(Elements)
+    /\ queues \in [Threads -> Seq(Elements)]
     /\ enqueued \in Nat
     /\ dequeued \in Nat
-    \* /\ producerTokens \in SUBSET Threads
-    \* /\ consumerTokens \in SUBSET Threads
     /\ dequeued <= enqueued
 
-varsEnqueued == <<dequeued>>
-varsDequeued == <<enqueued>>
-varsEnqueueFail == <<queue, enqueued>>
-varsDequeueFail == <<queue, dequeued>>
-varsCreateProducer == <<queue, enqueued, dequeued>>
-varsCreateConsumer == <<queue, enqueued, dequeued>>
-
-QueueEnqueue(element, success) ==
+QueueEnqueue(element, success, thread) ==
+    /\ thread \in Threads
     /\ element \in Elements
-    /\ IF Len(queue) < MaxElements
-       THEN /\ success = TRUE
-            /\ queue' = queue \o <<element>>
-            /\ enqueued' = enqueued + 1
-       ELSE /\ success = FALSE
-            /\ UNCHANGED varsEnqueueFail
-    /\ UNCHANGED varsEnqueued
+    /\ EnqueueOutcome(CanEnqueue(1), thread, PayloadForElement(element), 1, success)
+    /\ UNCHANGED dequeued
 
-QueueEnqueueWithToken(prodToken, element, success) ==
-    \* /\ prodToken \in producerTokens
-    /\ element \in Elements
-    /\ IF Len(queue) < MaxElements
-       THEN /\ success = TRUE
-            /\ queue' = queue \o <<element>>
-            /\ enqueued' = enqueued + 1
-       ELSE /\ success = FALSE
-            /\ UNCHANGED varsEnqueueFail
-    /\ UNCHANGED varsEnqueued
+QueueEnqueueWithToken(prodToken, element, success, thread) ==
+    \* /\ prodToken \in Threads
+    /\ QueueEnqueue(element, success, thread)
 
-QueueEnqueueBulk(elements, count, success) ==
-    /\ elements \in [1..MaxBulkSize -> Elements]
-    /\ count \in 1..MaxBulkSize
-    /\ Len(elements) >= count
-    /\ IF Len(queue) + count <= MaxElements
-       THEN /\ success = TRUE
-            /\ queue' = queue \o SubSeq(elements, 1, count)
-            /\ enqueued' = enqueued + count
-       ELSE /\ success = FALSE
-            /\ UNCHANGED varsEnqueueFail
-    /\ UNCHANGED varsEnqueued
+QueueEnqueueBulk(elements, count, success, thread) ==
+    /\ thread \in Threads
+    /\ BulkArgsOk(elements, count)
+    /\ LET payload == BulkPayload(elements, count)
+       IN EnqueueOutcome(CanEnqueue(count), thread, payload, count, success)
+    /\ UNCHANGED dequeued
 
-QueueEnqueueBulkWithToken(prodToken, elements, count, success) ==
-    \* /\ prodToken \in producerTokens
-    /\ elements \in [1..MaxBulkSize -> Elements]
-    /\ count \in 1..MaxBulkSize
-    /\ Len(elements) >= count
-    /\ IF Len(queue) + count <= MaxElements
-       THEN /\ success = TRUE
-            /\ queue' = queue \o SubSeq(elements, 1, count)
-            /\ enqueued' = enqueued + count
-       ELSE /\ success = FALSE
-            /\ UNCHANGED varsEnqueueFail
-    /\ UNCHANGED varsEnqueued
+QueueEnqueueBulkWithToken(prodToken, elements, count, success, thread) ==
+    \* /\ prodToken \in Threads
+    /\ QueueEnqueueBulk(elements, count, success, thread)
 
-QueueTryEnqueue(element, success) ==
-    /\ element \in Elements
-    /\ IF Len(queue) < MaxElements
-       THEN /\ success = TRUE
-            /\ queue' = queue \o <<element>>
-            /\ enqueued' = enqueued + 1
-       ELSE /\ success = FALSE
-            /\ UNCHANGED varsEnqueueFail
-    /\ UNCHANGED varsEnqueued
+QueueTryEnqueue(element, success, thread) ==
+    /\ QueueEnqueue(element, success, thread)
 
-QueueTryEnqueueWithToken(prodToken, element, success) ==
-    \* /\ prodToken \in producerTokens
-    /\ element \in Elements
-    /\ IF Len(queue) < MaxElements
-       THEN /\ success = TRUE
-            /\ queue' = queue \o <<element>>
-            /\ enqueued' = enqueued + 1
-       ELSE /\ success = FALSE
-            /\ UNCHANGED varsEnqueueFail
-    /\ UNCHANGED varsEnqueued
+QueueTryEnqueueWithToken(prodToken, element, success, thread) ==
+    /\ QueueEnqueue(element, success, thread)
 
-QueueTryEnqueueBulk(elements, count, success) ==
-    /\ elements \in [1..MaxBulkSize -> Elements]
-    /\ count \in 1..MaxBulkSize
-    /\ Len(elements) >= count
-    /\ IF Len(queue) + count <= MaxElements
-       THEN /\ success = TRUE
-            /\ queue' = queue \o SubSeq(elements, 1, count)
-            /\ enqueued' = enqueued + count
-       ELSE /\ success = FALSE
-            /\ UNCHANGED varsEnqueueFail
-    /\ UNCHANGED varsEnqueued
+QueueTryEnqueueBulk(elements, count, success, thread) ==
+    /\ QueueEnqueueBulk(elements, count, success, thread)
 
-QueueTryEnqueueBulkWithToken(prodToken, elements, count, success) ==
-    \* /\ prodToken \in producerTokens
-    /\ elements \in [1..MaxBulkSize -> Elements]
-    /\ count \in 1..MaxBulkSize
-    /\ Len(elements) >= count
-    /\ IF Len(queue) + count <= MaxElements
-       THEN /\ success = TRUE
-            /\ queue' = queue \o SubSeq(elements, 1, count)
-            /\ enqueued' = enqueued + count
-       ELSE /\ success = FALSE
-            /\ UNCHANGED varsEnqueueFail
-    /\ UNCHANGED varsEnqueued
+QueueTryEnqueueBulkWithToken(prodToken, elements, count, success, thread) ==
+    /\ QueueEnqueueBulk(elements, count, success, thread)
 
-QueueTryDequeue(element, success) ==
-    /\ IF Len(queue) > 0
-       THEN /\ success = TRUE
-            /\ element = Head(queue)
-            /\ queue' = Tail(queue)
-            /\ dequeued' = dequeued + 1
-       ELSE /\ success = FALSE
-            /\ element \in Elements  
-            /\ UNCHANGED varsDequeueFail
-    /\ UNCHANGED varsDequeued
+QueueTryDequeue(element, success, thread) ==
+    /\ thread \in Threads
+    /\ DequeueOutcome(CanDequeue(thread), thread, element, success)
+    /\ UNCHANGED enqueued
 
-QueueTryDequeueWithToken(consToken, element, success) ==
-    \* /\ consToken \in consumerTokens
-    /\ IF Len(queue) > 0
-       THEN /\ success = TRUE
-            /\ element = Head(queue)
-            /\ queue' = Tail(queue)
-            /\ dequeued' = dequeued + 1
-       ELSE /\ success = FALSE
-            /\ element \in Elements  
-            /\ UNCHANGED varsDequeueFail
-    /\ UNCHANGED varsDequeued
+QueueTryDequeueWithToken(consToken, element, success, thread) ==
+    \* /\ consToken \in Threads
+    /\ QueueTryDequeue(element, success, thread)
 
-QueueTryDequeueBulk(elements, max, count) ==
-    /\ elements \in [1..MaxBulkSize -> Elements]
+QueueTryDequeueBulk(elements, max, count, producers) ==
+    /\ BulkBuffer(elements)
     /\ max \in 1..MaxBulkSize
-    /\ Len(elements) >= max
-    /\ LET actualCount == IF Len(queue) >= max THEN max ELSE Len(queue)
-       IN /\ count = actualCount
-          /\ IF actualCount > 0
-             THEN /\ queue' = SubSeq(queue, actualCount + 1, Len(queue))
-                  /\ dequeued' = dequeued + actualCount
-             ELSE /\ UNCHANGED <<queue, dequeued>>
-    /\ UNCHANGED varsDequeued
+    /\ count \in 0..MaxBulkSize
+    /\ count = Len(elements)
+    /\ count <= max
+    /\ producers \in Seq(Threads)
+    /\ Len(producers) = count
+    /\ BulkDequeueOutcomeMulti(elements, producers)
+    /\ UNCHANGED enqueued
 
-QueueTryDequeueBulkWithToken(consToken, elements, max, count) ==
-    \* /\ consToken \in consumerTokens
-    /\ elements \in [1..MaxBulkSize -> Elements]
-    /\ max \in 1..MaxBulkSize
-    /\ Len(elements) >= max
-    /\ LET actualCount == IF Len(queue) >= max THEN max ELSE Len(queue)
-       IN /\ count = actualCount
-          /\ IF actualCount > 0
-             THEN /\ queue' = SubSeq(queue, actualCount + 1, Len(queue))
-                  /\ dequeued' = dequeued + actualCount
-             ELSE /\ UNCHANGED <<queue, dequeued>>
-    /\ UNCHANGED varsDequeued
+QueueTryDequeueBulkWithToken(consToken, elements, max, count, producers) ==
+    \* /\ consToken \in Threads
+    /\ QueueTryDequeueBulk(elements, max, count, producers)
 
-QueueTryDequeueFromProducer(prodToken, element, success) ==
-    \* /\ prodToken \in producerTokens
-    /\ IF Len(queue) > 0
-       THEN /\ success = TRUE
-            /\ element = Head(queue)
-            /\ queue' = Tail(queue)
-            /\ dequeued' = dequeued + 1
-       ELSE /\ success = FALSE
-            /\ element \in Elements 
-            /\ UNCHANGED varsDequeueFail
-    /\ UNCHANGED varsDequeued
+QueueTryDequeueFromProducer(prodToken, element, success, thread) ==
+    \* /\ prodToken \in Threads
+    /\ QueueTryDequeue(element, success, thread)
 
-QueueTryDequeueBulkFromProducer(prodToken, elements, max, count) ==
-    \* /\ prodToken \in producerTokens
-    /\ elements \in [1..MaxBulkSize -> Elements]
-    /\ max \in 1..MaxBulkSize
-    /\ Len(elements) >= max
-    /\ LET actualCount == IF Len(queue) >= max THEN max ELSE Len(queue)
-       IN /\ count = actualCount
-          /\ IF actualCount > 0
-             THEN /\ queue' = SubSeq(queue, actualCount + 1, Len(queue))
-                  /\ dequeued' = dequeued + actualCount
-             ELSE /\ UNCHANGED <<queue, dequeued>>
-    /\ UNCHANGED varsDequeued
+QueueTryDequeueBulkFromProducer(prodToken, elements, max, count, producers) ==
+    \* /\ prodToken \in Threads
+    /\ producers = RepeatValue(prodToken, count)
+    /\ QueueTryDequeueBulk(elements, max, count, producers)
 
 QueueSizeApprox(size) ==
-    /\ size = Len(queue)
-    /\ UNCHANGED vars
-
-\* CreateProducerToken(thread) ==
-\*     /\ thread \in Threads
-\*     /\ thread \notin producerTokens
-\*     /\ producerTokens' = producerTokens \cup {thread}
-\*     /\ UNCHANGED varsCreateProducer
-
-\* CreateConsumerToken(thread) ==
-\*     /\ thread \in Threads
-\*     /\ thread \notin consumerTokens
-\*     /\ consumerTokens' = consumerTokens \cup {thread}
-\*     /\ UNCHANGED varsCreateConsumer
+    /\ size = TotalLen(queues)
+    /\ UNCHANGED queues
+    /\ UNCHANGED enqueued
+    /\ UNCHANGED dequeued
 
 Init ==
-    /\ queue = <<>>
+    /\ queues = [thread \in Threads |-> <<>>]
     /\ enqueued = 0
     /\ dequeued = 0
-    \* /\ producerTokens = Threads 
-    \* /\ consumerTokens = Threads
 
 Next ==
-    \/ \E element \in Elements, success \in BOOLEAN :
-        QueueEnqueue(element, success)
-    \* \/ \E prodToken \in Threads, element \in Elements, success \in BOOLEAN :
-    \*     QueueEnqueueWithToken(prodToken, element, success)
-    \/ \E elements \in [1..MaxBulkSize -> Elements], count \in 1..MaxBulkSize, success \in BOOLEAN :
-        QueueEnqueueBulk(elements, count, success)
-    \* \/ \E prodToken \in Threads, elements \in [1..MaxBulkSize -> Elements], count \in 1..MaxBulkSize, success \in BOOLEAN :
-    \*     QueueEnqueueBulkWithToken(prodToken, elements, count, success)
-    \/ \E element \in Elements, success \in BOOLEAN :
-        QueueTryEnqueue(element, success)
-    \* \/ \E prodToken \in Threads, element \in Elements, success \in BOOLEAN :
-    \*     QueueTryEnqueueWithToken(prodToken, element, success)
-    \/ \E elements \in [1..MaxBulkSize -> Elements], count \in 1..MaxBulkSize, success \in BOOLEAN :
-        QueueTryEnqueueBulk(elements, count, success)
-    \* \/ \E prodToken \in Threads, elements \in [1..MaxBulkSize -> Elements], count \in 1..MaxBulkSize, success \in BOOLEAN :
-    \*     QueueTryEnqueueBulkWithToken(prodToken, elements, count, success)
-    \/ \E element \in Elements, success \in BOOLEAN :
-        QueueTryDequeue(element, success)
-    \* \/ \E consToken \in Threads, element \in Elements, success \in BOOLEAN :
-    \*     QueueTryDequeueWithToken(consToken, element, success)
-    \/ \E elements \in [1..MaxBulkSize -> Elements], max \in 1..MaxBulkSize, count \in 0..MaxBulkSize :
-        QueueTryDequeueBulk(elements, max, count)
-    \* \/ \E consToken \in Threads, elements \in [1..MaxBulkSize -> Elements], max \in 1..MaxBulkSize, count \in 0..MaxBulkSize :
-    \*     QueueTryDequeueBulkWithToken(consToken, elements, max, count)
-    \/ \E prodToken \in Threads, element \in Elements, success \in BOOLEAN :
-        QueueTryDequeueFromProducer(prodToken, element, success)
-    \* \/ \E prodToken \in Threads, elements \in [1..MaxBulkSize -> Elements], max \in 1..MaxBulkSize, count \in 0..MaxBulkSize :
-    \*     QueueTryDequeueBulkFromProducer(prodToken, elements, max, count)
+    \/ \E thread \in Threads, element \in Elements, success \in BOOLEAN :
+        QueueEnqueue(element, success, thread)
+    \/ \E thread \in Threads, elements \in BulkBufferSet, count \in 1..MaxBulkSize, success \in BOOLEAN :
+        QueueEnqueueBulk(elements, count, success, thread)
+    \/ \E thread \in Threads, element \in Elements, success \in BOOLEAN :
+        QueueTryEnqueue(element, success, thread)
+    \/ \E thread \in Threads, elements \in BulkBufferSet, count \in 1..MaxBulkSize, success \in BOOLEAN :
+        QueueTryEnqueueBulk(elements, count, success, thread)
+    \/ \E thread \in Threads, element \in Elements, success \in BOOLEAN :
+        QueueTryDequeue(element, success, thread)
+    \/ \E elements \in BulkBufferSet, max \in 1..MaxBulkSize, count \in 0..MaxBulkSize, producers \in Seq(Threads) :
+        QueueTryDequeueBulk(elements, max, count, producers)
+    \/ \E thread \in Threads, element \in Elements, success \in BOOLEAN :
+        QueueTryDequeueFromProducer(thread, element, success, thread)
+    \/ \E thread \in Threads, elements \in BulkBufferSet, max \in 1..MaxBulkSize, count \in 0..MaxBulkSize, producers \in Seq(Threads) :
+        QueueTryDequeueBulkFromProducer(thread, elements, max, count, producers)
     \/ \E size \in 0..MaxElements :
         QueueSizeApprox(size)
 
+NoLostElements ==
+    enqueued - dequeued = TotalLen(queues)
 
 QueueInvariant ==
-    /\ Len(queue) = enqueued - dequeued
-    /\ dequeued <= enqueued
+    /\ NoLostElements
     /\ enqueued <= MaxElements + dequeued
 
 StateConstraints ==
-    /\ Len(queue) <= 2
+    /\ TotalLen(queues) <= 2
     /\ enqueued <= 4
     /\ dequeued <= 4
-
-NoLostElements ==
-    enqueued - dequeued = Len(queue)
-
 
 Spec == Init /\ [][Next]_vars
 
