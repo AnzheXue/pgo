@@ -15,6 +15,31 @@ Each evaluated system lives in one subfolder.
 Currently, `concurrentqueue`, `setbench`, `wiredtiger` and `atomic` work.
 Note that you will need separate permission to check out a private form of `setbench`.
 
+## System Prerequisites
+
+### Actual Requirements
+
+- **Linux** from recent few years. Linux must be running on **bare metal or a VM**; containers on other OS will not work.
+- **Nix** installation (see `.devcontainer/devcontainer.json` for setup)
+
+### System Configuration for rr
+
+Two system-level configurations are required:
+
+**1. Performance counter access:**
+```bash
+sudo sysctl kernel.perf_event_paranoid=1. # <=3
+```
+
+**2. AMD Zen CPU workaround (AMD EPYC/Ryzen only):**
+```bash
+curl -o /tmp/zen_workaround.py https://raw.githubusercontent.com/rr-debugger/rr/master/scripts/zen_workaround.py
+sudo modprobe msr
+sudo python3 /tmp/zen_workaround.py
+```
+
+In VMs, run these commands on the host machine.
+
 ## Data management
 
 All data is stored in a local SQLite database named `eval.sqlite`.
