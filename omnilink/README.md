@@ -4,7 +4,7 @@ This folder contains build definitions that automate most experiments.
 For all commands, _run them from the repo root, not here_.
 That's where `./mill` lives.
 
-The build definitions are in `package.mill`, with dependencies on `util.mill` and `GitRepo.mill`.
+The build definitions are in `package.mill`. Everything has been consolidated into a single build file.
 
 Note: all system dependencies are installed by the Dockerfile inside `../.devcontainer`.
 If you use devcontainers, it will "just work".
@@ -12,12 +12,12 @@ Otherwise, make sure you have the packages listed there installed, and consider 
 You will use them a lot.
 
 Each evaluated system lives in one subfolder.
-Currently, `setbench` and `wiredtiger` work.
+Currently, `concurrentqueue`, `setbench`, `wiredtiger` and `atomic` work.
 Note that you will need separate permission to check out a private form of `setbench`.
 
 ## Data management
 
-All data is stored in a local DuckDB database named `eval.duckdb`.
+All data is stored in a local SQLite database named `eval.sqlite`.
 It is not committed to source control, and acts as a persistent cache for recorded executions and validation results.
 You should not need to interact with it directly.
 
@@ -46,10 +46,10 @@ Note that the actual count reflects any and all traces you already have in a giv
 *Don't try to copy `out/`.*
 It will just lead to broken paths and frustration.
 
-The `omnilink/eval.duckdb` is a self-contained record of everything you did, including traces and counterexamples.
+The `omnilink/eval.sqlite` is a self-contained record of everything you did, including traces and counterexamples.
 Copy that into the target machines `omnilink/` dir and run the commands you need (like extracting counterexamples).
 
-How to merge different `eval.duckdb` is an open question.
+How to merge different `eval.sqlite` is an open question.
 For best future proofing, add build configs rather than editing existing ones, because the same config name doing different things would be confusing.
 The system is built so many contradictory configs / builds / etc can coexist under different names.
 
