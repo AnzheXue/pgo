@@ -124,47 +124,47 @@ trait GenTLA:
         case (name, Nil, false) =>
           s"""__op_name = \"$name\" ->
              |    /\\ __Spec!$name
-             |    /\\ __Action_$name
              |    /\\ __action' = __event
+             |    /\\ __Action_$name
              |    /\\ $incPC""".stripMargin
         case (name, args, false) =>
           s"""__op_name = \"$name\" ->
              |    /\\ __Spec!$name(${args.map(a => s"__op.$a").mkString(", ")})
-             |    /\\ __Action_$name
              |    /\\ __action' = __event
+             |    /\\ __Action_$name
              |    /\\ $incPC""".stripMargin
         case (name, Nil, true) =>
           s"""__op_name = \"$name\" ->
              |    \\/ /\\ __Spec!${name}_Done
-             |       /\\ __Action_${name}_Done
              |       /\\ __action' = [__event EXCEPT !.operation_name = \"${name}_Done\"]
+             |       /\\ __Action_${name}_Done
              |       /\\ $incPC
              |    \\/ /\\ __Spec!${name}_Step
-             |       /\\ __Action_${name}_Step
              |       /\\ __action' = [__event EXCEPT !.operation_name = \"${name}_Step\"]
+             |       /\\ __Action_${name}_Step
              |       /\\ UNCHANGED __pc""".stripMargin
         case (name, args, true) =>
           s"""__op_name = \"$name\" ->
              |    \\/ /\\ __Spec!${name}_Done(${args
               .map(a => s"__op.$a")
               .mkString(", ")})
-             |       /\\ __Action_${name}_Done
              |       /\\ __action' = [__event EXCEPT !.operation_name = \"${name}_Done\"]
+             |       /\\ __Action_${name}_Done
              |       /\\ $incPC
              |    \\/ /\\ __Spec!${name}_Step(${args
               .map(a => s"__op.$a")
               .mkString(", ")})
-             |       /\\ __Action_${name}_Step
              |       /\\ __action' = [__event EXCEPT !.operation_name = \"${name}_Step\"]
+             |       /\\ __Action_${name}_Step
              |       /\\ UNCHANGED __pc""".stripMargin
     ++ List(
       s"""__op_name = \"__TerminateThread\" ->
-         |    /\\ __Action__TerminateThread
          |    /\\ __action' = __event
+         |    /\\ __Action__TerminateThread
          |    /\\ $incPC""".stripMargin,
       s"""__op_name = \"__AbortThread\" ->
-         |    /\\ __Action__AbortThread
          |    /\\ __action' = __event
+         |    /\\ __Action__AbortThread
          |    /\\ $incPC""".stripMargin,
     )
 
