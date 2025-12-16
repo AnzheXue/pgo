@@ -81,6 +81,10 @@ object `package` extends Module:
   trait WTTracingConfigModule extends build.omnilink.TracingConfigModule:
     wtTracingConfigModule =>
     def disableRR: Boolean = false
+    object singleThreadConfig extends ConfigModule:
+      def threadCount = 1
+      def operationCount = 100000
+    end singleThreadConfig
     object defaultConfig extends ConfigModule:
       def threadCount = 5
       def operationCount = 100

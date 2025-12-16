@@ -145,6 +145,7 @@ struct WorkloadContext
     int nextTransactionId = thread_idx;
     int transactionId = -1;
     uint64_t prepare_timestamp = 0;
+    uint64_t read_timestamp = 0;
     bool transactionIsPrepared = false;
     bool transactionHasFailed = false;
 
@@ -231,6 +232,13 @@ struct WorkloadContext
       if (transactionId == -1)
         ctx.unsupported();
       int ret = session->rollback_transaction(session, nullptr);
+      ctx.refine_op_end();
+      {
+        std::unique_lock active_read_timestamps_lck{
+          workload_context.active_read_timestamps_m};
+        workload_context.active_read_timestamps.erase(this->read_timestamp);
+        this->read_timestamp = 0;
+      }
       ctx.op.n = "n";
       ctx.op.tid = transactionId;
       ctx.op._did_abort = ret != 0;
@@ -239,6 +247,7 @@ struct WorkloadContext
     }
 
     void perform_operation(Ctx<Storage::CommitPreparedTransaction> &ctx) {
+      ctx.unsupported();
       if (transactionId == -1 || !transactionIsPrepared ||
           transactionHasFailed) {
         ctx.unsupported();
@@ -281,12 +290,15 @@ struct WorkloadContext
       std::shared_lock connection_lck{workload_context.connection_m};
       std::shared_lock stable_timestamp_lck{
           workload_context.stable_timestamp_m};
-      std::shared_lock active_read_timestamps_lck{
+      uint64_t commit_timestamp;
+      {
+        std::shared_lock active_read_timestamps_lck{
           workload_context.active_read_timestamps_m};
-      auto commit_timestamp = find_timestamp_at({
-          workload_context.stable_timestamp + 1,
-          max_active_read_timestamp_nolock() + 1,
-      });
+        commit_timestamp = find_timestamp_at({
+            workload_context.stable_timestamp + 1,
+            max_active_read_timestamp_nolock() + 1,
+        });
+      }
       int currTransactionId = transactionId;
       ctx.refine_op_start();
       int ret = session->commit_transaction(
@@ -294,6 +306,12 @@ struct WorkloadContext
                        {"commit_timestamp", hex64(commit_timestamp)},
                    });
       ctx.refine_op_end();
+      {
+        std::unique_lock active_read_timestamps_lck{
+          workload_context.active_read_timestamps_m};
+        workload_context.active_read_timestamps.erase(this->read_timestamp);
+        this->read_timestamp = 0;
+      }
       // unconditionally void the transaction, either it committed or rolled
       // back
       void_transaction();
@@ -305,6 +323,7 @@ struct WorkloadContext
     }
 
     void perform_operation(Ctx<Storage::PrepareTransaction> &ctx) {
+      ctx.unsupported();
       if (transactionId == -1 || transactionIsPrepared ||
           transactionHasFailed) {
         ctx.unsupported();
@@ -337,6 +356,7 @@ struct WorkloadContext
     }
 
     void perform_operation(Ctx<Storage::RollbackToStable> &ctx) {
+      ctx.unsupported();
       std::unique_lock connection_lck{workload_context.connection_m};
       std::unique_lock existing_kvs_lck{workload_context.existing_kvs_m};
       std::unique_lock oldest_timestamp_lck{
@@ -361,6 +381,7 @@ struct WorkloadContext
     }
 
     void perform_operation(Ctx<Storage::SetOldestTimestamp> &ctx) {
+      ctx.unsupported();
       std::unique_lock connection_lck{workload_context.connection_m};
       std::unique_lock existing_kvs_lck{workload_context.existing_kvs_m};
       std::unique_lock oldest_timestamp_lck{
@@ -387,6 +408,7 @@ struct WorkloadContext
     }
 
     void perform_operation(Ctx<Storage::SetStableTimestamp> &ctx) {
+      ctx.unsupported();
       std::unique_lock connection_lck{workload_context.connection_m};
       std::unique_lock existing_kvs_lck{workload_context.existing_kvs_m};
       std::unique_lock oldest_timestamp_lck{
@@ -433,6 +455,7 @@ struct WorkloadContext
         transactionHasFailed = false;
         transactionIsPrepared = false;
         chosenTransactionId = transactionId;
+        this->read_timestamp = read_timestamp;
       } else {
         std::unique_lock active_read_timestamps_lck{
             workload_context.active_read_timestamps_m};

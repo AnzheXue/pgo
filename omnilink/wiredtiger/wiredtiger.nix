@@ -8,18 +8,14 @@
   omnilink,
   msgpack-cxx,
 
-  ghOwner ? "wiredtiger",
-  ghRepo ? "wiredtiger",
-  ghHash ? "",
+  ghUrl ? "https://github.com/wiredtiger/wiredtiger.git",
   ghRev,
 }:
 let
-  src = fetchFromGitHub {
-    owner = ghOwner;
-    repo = ghRepo;
+  src = (builtins.fetchGit {
+    url = ghUrl;
     rev = ghRev;
-    hash = ghHash;
-  };
+  }).outPath;
 in
 stdenv.mkDerivation {
   version = ghRev;
@@ -35,6 +31,8 @@ stdenv.mkDerivation {
     # allows us to extract wtperf
     "-DENABLE_STATIC=ON"
     "-DENABLE_SHARED=OFF"
+    # This one's broken for some reason.
+    "-DENABLE_PYTHON=OFF"
   ];
   buildInputs = [
     python3
@@ -47,8 +45,21 @@ stdenv.mkDerivation {
     cmake
     pkg-config
   ];
-  src = src;
+  env.WIREDTIGER_SRC = src;
+  unpackPhase = ''
+    echo skipping unpack
+  '';
+  configurePhase = ''
+    mkdir build
+    cmake -B ./build -S "$WIREDTIGER_SRC" $cmakeFlags
+  '';
+  buildPhase = ''
+    cmake --build ./build
+  '';
+  installPhase = ''
+    cmake --install ./build --prefix $out
+  '';
   postInstall = ''
-    cp bench/wtperf/wtperf $out/bin/wtperf
+    cp build/bench/wtperf/wtperf $out/bin/wtperf
   '';
 }

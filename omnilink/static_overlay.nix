@@ -10,12 +10,10 @@ final: prev: {
     wiredtiger = (prev.omnilink.wiredtiger or {}) // {
       lib.v11_3_1 = final.callPackage ./wiredtiger/wiredtiger.nix {
         ghRev = "05c56015a42154ac8145366678a4f8eb419b5933";
-        ghHash = "sha256-K5cZZTvZaWR6gVXF+mHNh7nHxMqi9XaEpB2qsd/pay8=";
       };
       lib.lockbug = final.callPackage ./wiredtiger/wiredtiger.nix {
-        ghOwner = "fhackett";
+        ghUrl = "https://github.com/fhackett/wiredtiger.git";
         ghRev = "11a7aaf61f3baffc0ae743a2813d1010d57fee6d";
-        ghHash = "sha256-2hpVPmKKQxrioXYGm4x1T8ELKl2Fyf3fEYRtc+qlnlg=";
       };
       workload = final.callPackage ./wiredtiger/workload.nix { };
       reflocking_wrapper = final.callPackage ./wiredtiger/reflocking_wrapper.nix { };
